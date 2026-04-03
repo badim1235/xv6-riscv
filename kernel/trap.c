@@ -80,9 +80,24 @@ usertrap(void)
   if(killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  // give up the CPU if this is a timer interrupt
+  // && current process is not null
+  // && current process is running
+  // then we change values of runtime, vruntime, vdeadline, and time_slice of the current process
+  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
+    struct proc *p = myproc();
+
+    p->runtime += 1; // runtime increases by 1 for every timer interrupt
+    p->vruntime += (1000*1024) / p->weight; // vruntime increases by 1024/weight
+
+    p->time_slice -= 1; // time_slice decreases by 1 for every timer interrupt
+
+    if(p->time_slice <= 0) { // if time_slice is exhausted, we need to reschedule
+      p->vdeadline = p->vruntime + (5000 * 1024 / p->weight); // update vdeadline
+
+      yield(); // then yield the CPU
+    }
+  }
 
   prepare_return();
 
@@ -152,8 +167,20 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
+    struct proc *p = myproc();
+
+    p->runtime += 1; // runtime increases by 1 for every timer interrupt
+    p->vruntime += 1024 / p->weight; // vruntime increases by 1024/weight
+
+    p->time_slice -= 1; // time_slice decreases by 1 for every timer interrupt
+
+    if(p->time_slice <= 0) { // if time_slice is exhausted, we need to reschedule
+      p->vdeadline = p->vruntime + (5 * 1024 / p->weight); // update vdeadline
+
+      yield(); // then yield the CPU
+    }
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.

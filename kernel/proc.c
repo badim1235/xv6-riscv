@@ -12,6 +12,17 @@ struct proc proc[NPROC];
 
 struct proc *initproc;
 
+const int nice_weight[40] = {
+/*  0*/ 88761, 71755, 56483, 46273, 36291,
+/*  5*/ 29154, 23254, 18705, 14949, 11916,
+/* 10*/  9548,  7620,  6100,  4904,  3906,
+/* 15*/  3121,  2501,  1991,  1586,  1277,
+/* 20*/  1024,   820,   655,   526,   423,
+/* 25*/   335,   272,   215,   172,   137,
+/* 30*/   110,    87,    70,    56,    45,
+/* 35*/    36,    29,    23,    18,    15
+};
+
 int nextpid = 1;
 struct spinlock pid_lock;
 
@@ -126,6 +137,12 @@ found:
   p->state = USED;
 
   p->nice=20;
+
+  p->weight = nice_weight[p->nice];
+  p->runtime = 0;
+  p->vruntime = 0;
+  p->vdeadline = p->vruntime + (5000 * 1024 / p->weight);
+  p->time_slice = 5;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -292,6 +309,14 @@ kfork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->nice = p->nice;
+  np->weight = p->weight;
+  np->runtime = 0;
+  np->vruntime = p->vruntime;
+  np->vdeadline = np->vruntime + (5000 * 1024 / np->weight);
+  np->time_slice = 5;
+
+
   pid = np->pid;
 
   release(&np->lock);
@@ -439,24 +464,64 @@ scheduler(void)
     intr_on();
     intr_off();
 
+    int v0=__INT_MAX__; 
+    int sum_weight = 0;
+    int sum_left=0;
+    struct proc *best_proc = 0;
+    int min_vdeadline = __INT_MAX__;
     int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
+    
+    for(p = proc; p < &proc[NPROC]; p++) { // runnable process의 v0, 가중치 합 계산
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
+        if(p->vruntime<v0){
+          v0=p->vruntime;
+        }
+        sum_weight += p->weight;
+      }
+      release(&p->lock);
+    }
+
+    if(sum_weight > 0) {
+      for(p = proc; p < &proc[NPROC]; p++) { // runnable process의 left 계산
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          sum_left+=(p->vruntime-v0)*p->weight;
+        }
+      release(&p->lock);
+      }
+
+    for(p = proc; p < &proc[NPROC]; p++) { // runnable process 중 vdeadline이 가장 작은 process 선택
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          if((sum_left >= (p->vruntime-v0)*p->weight) && (p->vdeadline < min_vdeadline)) {
+            min_vdeadline = p->vdeadline;
+            best_proc = p;
+          }
+      } 
+      release(&p->lock);
+    } 
+  }
+
+    if(best_proc != 0) { //선정된 best_proc에게 cpu 할당
+      acquire(&best_proc->lock);
+      if(best_proc->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+        best_proc->state = RUNNING;
+        c->proc = best_proc;
+        swtch(&c->context, &best_proc->context); //context switching
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-        found = 1;
       }
-      release(&p->lock);
+
+      release(&best_proc->lock);
+      found = 1;
     }
+
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -582,6 +647,9 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+
+        p->time_slice = 5;
+        p->vdeadline=p->vruntime + (5000 * 1024 / p->weight);
       }
       release(&p->lock);
     }
@@ -718,6 +786,8 @@ setnice(int pid, int value)
     acquire(&p->lock);
     if(p->pid == pid){
       p->nice = value;
+      p->weight = nice_weight[value]; 
+      p->vdeadline = p->vruntime + (5 * 1024 / p->weight);
       release(&p->lock);
       return 0;
     }
@@ -725,6 +795,9 @@ setnice(int pid, int value)
   }
   return -1;
 }
+
+// 전체 시스템의 총 틱(tick) 수를 가져오기 위해 선언
+extern uint ticks;
 
 void
 ps(int pid)
@@ -741,6 +814,7 @@ ps(int pid)
   struct proc *p;
   int valid = 0;
 
+  // 유효성 검사 (생략 - 기존과 동일)
   if(pid == 0) {
     valid = 1;
   } else {
@@ -757,11 +831,60 @@ ps(int pid)
 
   if(valid == 0) return;
 
-  printf("name\tpid\tstate\t\tpriority\n");
+  // 1. 현재 대기열의 v0와 sum_weight, sum_left 미리 계산 (Eligibility 판별용)
+  int v0 = 2147483647; 
+  int sum_weight = 0;
+  int sum_left = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state == RUNNABLE || p->state == RUNNING){ // RUNNABLE과 RUNNING만 고려 
+      if(p->vruntime < v0) v0 = p->vruntime;
+      sum_weight += p->weight;
+    }
+    release(&p->lock);
+  }
+
+  if(sum_weight > 0){
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE || p->state == RUNNING){
+        sum_left += (p->vruntime - v0) * p->weight;
+      }
+      release(&p->lock);
+    }
+  }
+
+  // 2. 헤더 출력
+  printf("name\tpid\tstate\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\tis_eligible\ttick %d\n",
+  ticks*1000);
+  
+  // 3. 프로세스 정보 출력
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
     if((pid == 0 || p->pid == pid) && (p->state != UNUSED)){
-      printf("%s\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
+      
+      // 자격(Eligibility) 확인
+      int is_eligible = 0;
+      if (p->state == RUNNABLE || p->state == RUNNING) {
+         if (sum_weight > 0 && sum_left >= (p->vruntime - v0) * sum_weight) {
+             is_eligible = 1;
+         }
+      } else {
+         is_eligible = 1; // 대기열에 없는 프로세스는 임의로 true 처리 (샘플 출력 참고 )
+      }
+
+
+      int m_runtime = p->runtime*1000;
+      int m_vruntime = p->vruntime;
+      int m_vdeadline = p->vdeadline;
+      int rw_ratio = (p->weight > 0) ? (m_runtime / p->weight) : 0; 
+
+      // 출력
+      printf("%s\t%d\t%s\t%d\t\t%d\t\t%d\t%d\t\t%d\t\t%s\t\n", 
+             p->name, p->pid, states[p->state], p->nice, 
+             rw_ratio, m_runtime, m_vruntime, m_vdeadline, 
+             is_eligible ? "true" : "false");
     }
     release(&p->lock);
   }

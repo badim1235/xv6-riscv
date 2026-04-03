@@ -106,4 +106,10 @@ struct proc {
   char name[16];               // Process name (debugging)
 
   int nice;
+
+  int runtime;
+  int vruntime;
+  int vdeadline;
+  int weight;
+  int time_slice;
 };
