@@ -796,7 +796,6 @@ setnice(int pid, int value)
   return -1;
 }
 
-// 전체 시스템의 총 틱(tick) 수를 가져오기 위해 선언
 extern uint ticks;
 
 void
@@ -814,7 +813,6 @@ ps(int pid)
   struct proc *p;
   int valid = 0;
 
-  // 유효성 검사 (생략 - 기존과 동일)
   if(pid == 0) {
     valid = 1;
   } else {
@@ -831,14 +829,13 @@ ps(int pid)
 
   if(valid == 0) return;
 
-  // 1. 현재 대기열의 v0와 sum_weight, sum_left 미리 계산 (Eligibility 판별용)
   int v0 = 2147483647; 
   int sum_weight = 0;
   int sum_left = 0;
 
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
-    if(p->state == RUNNABLE || p->state == RUNNING){ // RUNNABLE과 RUNNING만 고려 
+    if(p->state == RUNNABLE || p->state == RUNNING){
       if(p->vruntime < v0) v0 = p->vruntime;
       sum_weight += p->weight;
     }
@@ -855,23 +852,21 @@ ps(int pid)
     }
   }
 
-  // 2. 헤더 출력
   printf("name\tpid\tstate\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\tis_eligible\ttick %d\n",
   ticks*1000);
   
-  // 3. 프로세스 정보 출력
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
     if((pid == 0 || p->pid == pid) && (p->state != UNUSED)){
       
-      // 자격(Eligibility) 확인
+      // Eligibility 확인
       int is_eligible = 0;
       if (p->state == RUNNABLE || p->state == RUNNING) {
          if (sum_weight > 0 && sum_left >= (p->vruntime - v0) * sum_weight) {
              is_eligible = 1;
          }
       } else {
-         is_eligible = 1; // 대기열에 없는 프로세스는 임의로 true 처리 (샘플 출력 참고 )
+         is_eligible = 1; // 대기열에 없는 프로세스 true
       }
 
 
