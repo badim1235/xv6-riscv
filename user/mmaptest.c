@@ -45,7 +45,6 @@ int main(void) {
   mapped_memory[0] = 'A'; 
   
   after_fault = freemem();
-  // 페이지 할당(및 페이지 테이블 할당)으로 인해 메모리가 줄어들었는지 검사
   if (after_fault >= before) test_failed("Physical memory not allocated after page fault");
 
   munmap(addr);
@@ -169,6 +168,6 @@ int main(void) {
     test_passed("Fork test & Memory recovery handled perfectly");
   }
 
-  printf("\n========== ALL TESTS PASSED! CONGRATULATIONS! ==========\n");
+  printf("\n========== ALL TESTS PASSED==========\n");
   exit(0);
 }
