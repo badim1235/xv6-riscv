@@ -5,7 +5,6 @@
 
 #define PGSIZE 4096
 
-// param.h에 정의된 플래그들
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
 #define MAP_ANONYMOUS 0x1
@@ -26,12 +25,10 @@ int main(void) {
   int fd;
   uint64 before, after_mmap, after_fault, after_munmap;
 
-  printf("========== PROJECT 3 MMAP TEST START ==========\n");
+  printf("========== MMAP TEST ==========\n");
   printf("Initial free memory pages: %d\n\n", (int)freemem());
 
-  // ---------------------------------------------------------
   // Test 1: Anonymous mapping WITHOUT populate (Lazy Allocation)
-  // ---------------------------------------------------------
   printf("--- Test 1: Anonymous mapping (Without Populate) ---\n");
   before = freemem();
   addr = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS, -1, 0);
@@ -39,7 +36,7 @@ int main(void) {
   mapped_memory = (char*)addr;
 
   after_mmap = freemem();
-  if (after_mmap != before) test_failed("Memory allocated before page fault! (Not lazy)");
+  if (after_mmap != before) test_failed("Memory allocated before page fault!");
 
   // Write to memory -> triggers Page Fault
   mapped_memory[0] = 'A'; 
@@ -53,9 +50,7 @@ int main(void) {
   test_passed("Anonymous without populate & Page Fault handled");
 
 
-  // ---------------------------------------------------------
   // Test 2: Anonymous mapping WITH populate
-  // ---------------------------------------------------------
   printf("\n--- Test 2: Anonymous mapping (With Populate) ---\n");
   before = freemem();
   addr = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
@@ -70,9 +65,7 @@ int main(void) {
   test_passed("Anonymous with populate");
 
 
-  // ---------------------------------------------------------
-  // Test 3: File mapping WITHOUT populate (Lazy Allocation)
-  // ---------------------------------------------------------
+  // Test 3: File mapping WITHOUT populate
   printf("\n--- Test 3: File mapping (Without Populate) ---\n");
   fd = open("README", O_RDONLY); 
   if(fd < 0) test_failed("Failed to open README");
@@ -83,7 +76,7 @@ int main(void) {
   mapped_memory = (char*)addr;
 
   after_mmap = freemem();
-  if (after_mmap != before) test_failed("Memory allocated before page fault! (Not lazy)");
+  if (after_mmap != before) test_failed("Memory allocated before page fault!");
 
   // Read from memory -> triggers Page Fault
   char first_char = mapped_memory[0];
@@ -102,9 +95,7 @@ int main(void) {
   test_passed("File mapping without populate & Page Fault handled");
 
 
-  // ---------------------------------------------------------
   // Test 4: File mapping WITH populate
-  // ---------------------------------------------------------
   printf("\n--- Test 4: File mapping (With Populate) ---\n");
   fd = open("README", O_RDONLY);
   before = freemem();
@@ -126,9 +117,7 @@ int main(void) {
   test_passed("File mapping with populate");
 
 
-  // ---------------------------------------------------------
   // Test 5: Fork test & Freemem check
-  // ---------------------------------------------------------
   printf("\n--- Test 5: Fork comparison & Freemem ---\n");
   fd = open("README", O_RDONLY);
   addr = mmap(0, PGSIZE, PROT_READ, MAP_POPULATE, fd, 0); 

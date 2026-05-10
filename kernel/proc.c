@@ -203,6 +203,29 @@ freeproc(struct proc *p)
   p->state = UNUSED;
 
   // munmap all the mmap areas
+  for (int i = 0; i < 64; i++) {
+    if (p->mmap_areas[i].length > 0) {
+      uint64 start_va = MMAPBASE + p->mmap_areas[i].addr;
+      uint64 length = p->mmap_areas[i].length;
+      
+      // Check PTE
+      for (uint64 va = start_va; va < start_va + length; va += PGSIZE) {
+        pte_t *pte = walk(p->pagetable, va, 0);
+        if (pte != 0 && (*pte & PTE_V) != 0) {
+          uint64 pa = PTE2PA(*pte);
+          kfree((void*)pa);
+          *pte = 0;
+        }
+      }
+      
+      // Closing opend file
+      if (!(p->mmap_areas[i].flags & MAP_ANONYMOUS) && p->mmap_areas[i].f) {
+        fileclose(p->mmap_areas[i].f);
+      }
+      
+      p->mmap_areas[i].length = 0;
+    }
+  }
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -321,6 +344,14 @@ kfork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  for(i = 0; i < 64; i++){
+    np->mmap_areas[i] = p->mmap_areas[i]; // copy mmap
+    // if used slot and file mapped, filedup
+    if(np->mmap_areas[i].length > 0 && !(np->mmap_areas[i].flags & MAP_ANONYMOUS)){
+      filedup(np->mmap_areas[i].f);
+    }
+  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
