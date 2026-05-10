@@ -349,10 +349,39 @@ kfork(void)
   np->cwd = idup(p->cwd);
 
   for(i = 0; i < 64; i++){
-    np->mmap_areas[i] = p->mmap_areas[i]; // copy mmap
-    // if used slot and file mapped, filedup
-    if(np->mmap_areas[i].length > 0 && !(np->mmap_areas[i].flags & MAP_ANONYMOUS)){
-      filedup(np->mmap_areas[i].f);
+    np->mmap_areas[i] = p->mmap_areas[i];
+
+    if(np->mmap_areas[i].length > 0) {
+      if(!(np->mmap_areas[i].flags & MAP_ANONYMOUS)){
+        filedup(np->mmap_areas[i].f);
+      }
+
+      uint64 start_va = MMAPBASE + p->mmap_areas[i].addr;
+      uint64 end_va = start_va + p->mmap_areas[i].length;
+
+      for (uint64 va = start_va; va < end_va; va += PGSIZE) {
+        pte_t *pte = walk(p->pagetable, va, 0);
+        if (pte != 0 && (*pte & PTE_V) != 0) {
+          uint64 pa = PTE2PA(*pte);
+          uint flags = PTE_FLAGS(*pte);
+
+          char *mem = kalloc();
+          if (mem == 0) {
+            freeproc(np);
+            release(&np->lock);
+            return -1;
+          }
+          
+          memmove(mem, (char*)pa, PGSIZE);
+
+          if (mappages(np->pagetable, va, PGSIZE, (uint64)mem, flags) != 0) {
+            kfree(mem);
+            freeproc(np);
+            release(&np->lock);
+            return -1;
+          }
+        }
+      }
     }
   }
 
