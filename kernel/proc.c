@@ -190,9 +190,37 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  if(p->pagetable) {
+    for (int i = 0; i < 64; i++) {
+      if (p->mmap_areas[i].length > 0) {
+        uint64 start_va = MMAPBASE + p->mmap_areas[i].addr;
+        uint64 length = p->mmap_areas[i].length;
+        
+
+        for (uint64 va = start_va; va < start_va + length; va += PGSIZE) {
+          pte_t *pte = walk(p->pagetable, va, 0);
+          if (pte != 0 && (*pte & PTE_V) != 0) {
+            uint64 pa = PTE2PA(*pte);
+            kfree((void*)pa);
+            *pte = 0;
+          }
+        }
+        
+        // Closing open file
+        if (!(p->mmap_areas[i].flags & MAP_ANONYMOUS) && p->mmap_areas[i].f) {
+          fileclose(p->mmap_areas[i].f);
+        }
+        
+        p->mmap_areas[i].length = 0;
+      }
+    }
+  }
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -201,31 +229,6 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-
-  // munmap all the mmap areas
-  for (int i = 0; i < 64; i++) {
-    if (p->mmap_areas[i].length > 0) {
-      uint64 start_va = MMAPBASE + p->mmap_areas[i].addr;
-      uint64 length = p->mmap_areas[i].length;
-      
-      // Check PTE
-      for (uint64 va = start_va; va < start_va + length; va += PGSIZE) {
-        pte_t *pte = walk(p->pagetable, va, 0);
-        if (pte != 0 && (*pte & PTE_V) != 0) {
-          uint64 pa = PTE2PA(*pte);
-          kfree((void*)pa);
-          *pte = 0;
-        }
-      }
-      
-      // Closing opend file
-      if (!(p->mmap_areas[i].flags & MAP_ANONYMOUS) && p->mmap_areas[i].f) {
-        fileclose(p->mmap_areas[i].f);
-      }
-      
-      p->mmap_areas[i].length = 0;
-    }
-  }
 }
 
 // Create a user page table for a given process, with no user memory,
