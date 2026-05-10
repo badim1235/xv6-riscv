@@ -13,3 +13,9 @@
 #define MAXPATH      128   // maximum file path name
 #define USERSTACK    1     // user stack pages
 
+#define MMAPBASE      0x40000000  // base of mmap region
+#define PROT_READ       0x1         // pages can be read
+#define PROT_WRITE      0x2         // pages can be written
+
+#define MAP_ANONYMOUS   0x1         // mapping is not backed by any file
+#define MAP_POPULATE    0x2         // mapping is private

@@ -21,12 +21,15 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  uint64 free_pages_count; //counting the number of free pages
 } kmem;
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  kmem.free_pages_count = 0;
+
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -59,6 +62,7 @@ kfree(void *pa)
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
+  kmem.free_pages_count++; //increment the count of free pages
   release(&kmem.lock);
 }
 
@@ -72,8 +76,10 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    kmem.free_pages_count--; //decrement the count of free pages
+  }
   release(&kmem.lock);
 
   if(r)
@@ -82,17 +88,12 @@ kalloc(void)
 }
 
 uint64
-count_free_pages(void)
+get_free_pages_count(void)
 {
-  struct run *r;
-  uint64 count = 0;
+  uint64 count;
 
   acquire(&kmem.lock);
-  r = kmem.freelist;
-  while(r) {
-    count++;
-    r = r->next;
-  }
+  count = kmem.free_pages_count; //get the count of free pages
   release(&kmem.lock);
 
   return count;

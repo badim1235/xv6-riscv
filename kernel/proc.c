@@ -3,8 +3,11 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "fs.h"
 #include "proc.h"
 #include "defs.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -144,6 +147,16 @@ found:
   p->vdeadline = p->vruntime + (5000 * 1024 / p->weight);
   p->time_slice = 5;
 
+  for (int i = 0; i < 64; i++) { // initialize the mmap_areas array
+    p->mmap_areas[i].f = 0;
+    p->mmap_areas[i].addr = 0;
+    p->mmap_areas[i].length = 0;
+    p->mmap_areas[i].offset = 0;
+    p->mmap_areas[i].prot = 0;
+    p->mmap_areas[i].flags = 0;
+    p->mmap_areas[i].p = 0; 
+  }
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -188,6 +201,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  // munmap all the mmap areas
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -859,14 +874,13 @@ ps(int pid)
     acquire(&p->lock);
     if((pid == 0 || p->pid == pid) && (p->state != UNUSED)){
       
-      // Eligibility 확인
       int is_eligible = 0;
       if (p->state == RUNNABLE || p->state == RUNNING) {
-         if (sum_weight > 0 && sum_left >= (p->vruntime - v0) * sum_weight) {
+         if (sum_weight > 0 && sum_left >= (p->vruntime - v0) * p->weight) {
              is_eligible = 1;
          }
       } else {
-         is_eligible = 1; // 대기열에 없는 프로세스 true
+         is_eligible = 1;
       }
 
 
@@ -875,7 +889,6 @@ ps(int pid)
       int m_vdeadline = p->vdeadline;
       int rw_ratio = (p->weight > 0) ? (m_runtime / p->weight) : 0; 
 
-      // 출력
       printf("%s\t%d\t%s\t%d\t\t%d\t\t%d\t%d\t\t%d\t\t%s\t\n", 
              p->name, p->pid, states[p->state], p->nice, 
              rw_ratio, m_runtime, m_vruntime, m_vdeadline, 
@@ -888,7 +901,7 @@ ps(int pid)
 uint64
 meminfo(void)
 {
-  uint64 free_mem = count_free_pages();
+  uint64 free_mem = get_free_pages_count();
   return free_mem*4096;
 }
 
@@ -924,4 +937,158 @@ waitpid(int pid)
     
     sleep(p, &wait_lock);
   }
+}
+
+uint64
+mmap(uint64 addr, int length, int prot, int flags, int fd, int offset)
+{
+  struct proc *p = myproc();
+  struct file *f = 0;
+
+  // parameter error check
+  if(length <= 0 || addr % PGSIZE != 0 || length % PGSIZE != 0) {
+    return 0; // Failed: return 0
+  }
+
+  uint64 start_addr = addr + MMAPBASE;
+
+  int anonymous = (flags & MAP_ANONYMOUS) ? 1 : 0;
+  int populate  = (flags & MAP_POPULATE)  ? 1 : 0;
+  int read      = (prot & PROT_READ)      ? 1 : 0;
+  int write     = (prot & PROT_WRITE)     ? 1 : 0;
+
+  //error check
+  if (!anonymous) {
+    // file mapping, but fd = -1
+    if (fd < 0 || fd >= NOFILE || (f = p->ofile[fd]) == 0) {
+      return 0; 
+    }
+    //The protection of the file and the prot of the parameter are different
+    if (read && !f->readable) {
+      return 0;
+    }
+    if (write && !f->writable) {
+      return 0;
+    }
+  }
+  else { //anonymous mapping, but fd != -1 or offset != 0
+    if (fd != -1 || offset != 0) {
+      return 0;
+    }
+  }
+
+  // Find empty area
+  struct mmap_area *area = 0;
+  int i=0;
+  for(i=0;i<64;i++){
+    if(p->mmap_areas[i].length==0){
+      area=&p->mmap_areas[i];
+      break;
+    }
+  }
+  if(!area){
+    return 0; //no empty area
+  }
+
+  // If file mapping
+  if(!anonymous){
+    filedup(f);
+    area->f=f;
+    area->offset=offset;
+  }
+  else { //Anonymous mapping
+    area->f=0;
+    area->offset=0;
+  }
+  // Common
+  area->addr=addr;
+  area->length=length;
+  area->prot=prot;
+  area->flags=flags;
+  area->p=p;
+  
+
+  // popluate
+  if (populate) {
+    // Loop with page size. length range
+    for (uint64 va = start_addr; va < start_addr + length; va += PGSIZE) {
+      
+      // Allocate physical memory
+      void *pa = kalloc();
+      if (pa == 0) {
+        return 0; // Fail to allocate
+      }
+      memset(pa, 0, PGSIZE); // Anonymous mapping should be filled with 0
+
+      // Setting PTE flags
+
+      int pte_flags = PTE_U;
+      if (read) pte_flags |= PTE_R;
+      if (write) pte_flags |= PTE_W;
+
+      // Mapping virtual address to physical address
+      if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, pte_flags) != 0) {
+        kfree(pa);
+        return 0;
+      }
+
+      // If file mapping, read data from file to physical memory
+      if (!anonymous) {
+        int page_offset = va - start_addr;
+        
+        // Read data from file to physical memory
+        ilock(f->ip);
+        readi(f->ip,0, (uint64)pa, offset+page_offset, PGSIZE);
+        iunlock(f->ip);
+      }
+    }
+  }
+  // return virtual address
+  return start_addr;
+}
+
+int
+munmap(uint64 addr)
+{
+  struct proc *p = myproc();
+
+  // Find the area to unmap
+  struct mmap_area *area = 0;
+  for (int i = 0; i < 64; i++) {
+    if (p->mmap_areas[i].length > 0 && (MMAPBASE + p->mmap_areas[i].addr) == addr) {
+      area = &p->mmap_areas[i];
+      break;
+    }
+  }
+
+  if(!area){
+    return -1; // No such area
+  }
+
+  // Unmap that memory area
+  uint64 start_va=MMAPBASE + area->addr;
+  uint64 length=area->length;
+
+  for(uint64 va=start_va; va < start_va+length; va+=PGSIZE){
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if(pte && (*pte & PTE_V)){ // pte exists, and valid
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa); // Free physical memory
+      *pte=0; // Unmap virtual address
+    }
+  }
+
+  if(!(area->flags & MAP_ANONYMOUS) && area->f){ // if file mapping, decrease reference count of file
+    fileclose(area->f);
+  }
+  //map structure initialization
+  area->f=0;
+  area->addr=0;
+  area->length=0;
+  area->offset=0;
+  area->prot=0;
+  area->flags=0;
+  area->p=0;
+
+  return 1; // success
 }

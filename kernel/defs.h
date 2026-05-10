@@ -59,7 +59,7 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
-uint64          count_free_pages(void);
+uint64          get_free_pages_count(void);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -108,6 +108,11 @@ int             setnice(int, int);
 void            ps(int);
 uint64          meminfo(void);
 int             waitpid(int);
+
+//project3-mmap, munmap, freemem
+uint64          mmap(uint64 addr, int length, int prot, int flags, int fd, int offset);
+int             munmap(uint64 addr);
+int             freemem(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

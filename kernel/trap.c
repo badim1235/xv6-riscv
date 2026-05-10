@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -68,9 +71,64 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
+  } else if((r_scause() == 15 || r_scause() == 13)) {
     // page fault on lazily-allocated page
+    uint64 fault_va= r_stval();
+    uint64 scause=r_scause();
+    int handled = 0;
+
+    struct mmap_area *area=0;
+
+    for (int i=0;i<64;i++){
+      if(p->mmap_areas[i].length>0){
+        uint64 start=MMAPBASE+p->mmap_areas[i].addr;
+        uint64 end=start+p->mmap_areas[i].length;
+        if(fault_va>=start&&fault_va<end){
+          area=&p->mmap_areas[i];
+          break;
+        }
+      }
+    }
+
+    if(area){
+      if(scause==15 && !(area->prot & PROT_WRITE)){
+        p->killed=1;
+      }
+      else {
+        uint64 va_aligned = PGROUNDDOWN(fault_va);
+
+        void *pa=kalloc();
+        if(pa==0){
+          p->killed=1;
+        }
+        else{
+          memset(pa, 0, PGSIZE);
+          if(!(area->flags & MAP_ANONYMOUS)){ // if file mapping, read data from file
+            int page_offset = va_aligned - (MMAPBASE + area->addr);
+            ilock(area->f->ip);
+            readi(area->f->ip, 0, (uint64)pa, area->offset + page_offset, PGSIZE);
+            iunlock(area->f->ip);
+          }
+
+          int pte_flags = PTE_U;
+          if(area->prot & PROT_READ) pte_flags |= PTE_R;
+          if(area->prot & PROT_WRITE) pte_flags |= PTE_W;
+
+          if(mappages(p->pagetable, va_aligned, PGSIZE, (uint64)pa, pte_flags) != 0){
+            kfree(pa);
+            p->killed=1;
+          }
+          else{
+            handled = 1;
+          }
+        }
+    }
+  }
+
+  if(!handled){ // if the fault is not handled, kill the process
+    p->killed = 1;
+  }
+
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());

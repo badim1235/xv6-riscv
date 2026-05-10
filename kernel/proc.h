@@ -81,6 +81,16 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+struct mmap_area{
+  struct file *f;    // file pointer (if MAP_ANONYMOUS is not set)
+  uint64 addr; // starting address of the mapped area
+  int length;   // length of the mapped area
+  int offset;   // offset in the file (if MAP_ANONYMOUS is not set)
+  int prot;     // protection flags
+  int flags;    // mapping flags
+  struct proc *p; // the process with this mmap_area
+};
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -112,4 +122,6 @@ struct proc {
   int vdeadline;
   int weight;
   int time_slice;
+
+  struct mmap_area mmap_areas[64]; // for pa3
 };
